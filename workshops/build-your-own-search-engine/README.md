@@ -1,4 +1,4 @@
-#### Build your own Search Engine
+#### Build your own Search Engine | Toy Search Engine
 
 Code for the "Build Your Own Search Engine" Workshop
 Video: https://www.youtube.com/watch?v=nMrGK5QgPVE
