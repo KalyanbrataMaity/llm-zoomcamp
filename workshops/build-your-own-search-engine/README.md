@@ -323,3 +323,201 @@ You can fild the implementation here too if you want to use it: https://github.c
 
 Note: this is a toy example for illustrating how relevance search works. It's not meant to be used in production.
 
+# 4. Embeddings & Vector Search
+
+Problem with text - Only exact matches. How about synonyms?
+
+## What are Embeddings?
+- Conversion to Numbers: Embeddings transform different words, sentences and documents into dense vectors (arrays with numbers).
+
+- Capturing Similarity: They ensure similar items have similar numerical vectors, illustrating their closeness in terms of characteristics.
+
+- Dimensionality Reduction: Embeddings reduce complex characteristics into vectors.
+- Use in Machine Learning: These numerical vectors are used in machine learning models for tasks such as recommendations, text analysis, and pattern recognition.
+
+## SVD
+Singular value decomposition is the simplest way to turn Bag-of-Words representation into embeddings.
+This way we still don't preserve the word order (because it wasn't in the bag-of-words itself) but we reduce the dimentionality and capture synonyms.
+
+Without going into the mathematics, we can say that it is sufficient to know that SVD "compresses" our input vectors in such a way that as much as possible of the original information is retained.
+
+This compression is lossy compression - meaning that we won't be able to restore the 100% of the original vector, but the result is close enough.
+
+Example with images:
+\image\
+
+Let's use the vectorizer for the text field and turn it into embeddings
+
+```bash
+from sklearn.decomposition import TruncatedSVD
+
+X = matrics['text']
+cv = transformers['text']
+
+svd = TruncatedSVD(n_components=16)
+X_emb = svd.transform(X)
+X_emb[0]
+```
+
+For query:
+```bash
+query = 'I just signed up. Is it too late to join the course?'
+
+Q = cv.tranform([query])
+Q_emb = svd.transform(Q)
+Q_emb[0]
+```
+
+Similarity between the query and the document
+```bash
+np.dot(X_emb[0], Q_emb[0])
+```
+
+Let's do it for all the documents. It's  the same as previously, except we do it on embeddings, not on sparse matrices:
+```bash
+score = cosine_similarity(X_emb, Q_emb).flatten()
+idx = np.argsort(-score)[:10]
+list(df.loc[idx].text)
+```
+
+## Non-negative matrix factorization:
+SVD creates values with negative numbers. It's difficult to interpret them.
+
+NMF(Non-Negative Matrix Factorization) is a similar concept, except for non-negative matrices it produces non-negative results.
+
+We can interpret each of the columns (features) of the embeddings as different topic/concents and to what extent this document is about.
+
+Let's use it for the documents:
+```bash
+nmf = NMF(n_components=16)
+X_emb = nmf.fit_transform(X)
+X_emb[0]
+```
+
+And the query:
+```bash
+Q = cv.transform([query])
+Q_emb = nmf.transform(Q)
+Q_emb[0]
+```
+
+We compute the similarity in the same way as previously:
+```bash
+score = cosine_similarity(X_emb, Q_emb).flatten()
+idx = np.argsort(-score)[:10]
+list(df.loc[idx].text)
+```
+
+## BERT
+The problem with the previous two approaches is that they dont take into account the word order. They just treat all the words separately (that's why it's called "Bag-of-Words)
+
+BERT and other transformer models doesn't have this problem.
+
+Let's create embeddings with BERT. WE will use the huggingface library for that
+```bash
+pip install transformers tqdm
+```
+
+Use it:
+
+```bash
+import torch
+from transformers import BertModel, BertTokenizer
+
+tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+model = BertModel.from_pretrained("bert-base-uncased")
+model.eval() # Set the model to evaluation mode if not training
+```
+Here, we need:
+- tokenizer - for turning text into vectors
+- model - for compressing the test into embeddings
+
+First, we tokenize the text
+```bash
+texts = [
+    "Yes, we will keep all the materials after the course finishes.",
+    "You can follow the course at your own pace after it finishes"
+]
+encoded_input = tokenizer(texts, padding=True, truncation=True, return_tensors='pt')
+```
+
+Then we compute the embeddings
+```bash
+with torch.no_grad(): # Disable gradient calculation for inference
+    outputs = model(**encoded_input)
+    hidden_states = outputs.last_hidden_state
+```
+
+Now we need to compress the embeddings:
+```bash
+sentence_embeddings = hidden_state.mean(dim=1)
+sentense_embeddings.shape
+```
+
+And convert them to a numpy array
+```bash
+X_emb = sentence_embeddings.numpy()
+```
+
+Note that if use a GPU, then first you need to move your tensors to CPU
+```bash
+sentence_embeddings_cpu = sentence_embeddings.cpu()
+```
+
+Let's now compute it for our texts. We'll do it in batches. First, we define a function for batching:
+```bash
+def make_batches(seq, n):
+    result = []
+    for i in range(0, len(seq), n):
+        batch = seq[i:i+n]
+        result.append(batch)
+    return batch
+```
+
+And use it:
+```bash
+texts = df['text'].tolist()
+text_batches = make_batches(texts, 8)
+
+all_embeddings = []
+
+for batch in tqdm(text_bacthes):
+    encoded_input = tokenizer(batch, padding=True, truncation=True, return_tensors='pt')
+
+    with torch.no_grad():
+        outputs = model(**encoded_input)
+        hidden_states = outputs.last_hidden_state
+
+        batch_embeddings = hidden_states.mean(dim=1)
+        batch_embeddings_np = batch_embeddings.cpu().numpy()
+        all_embeddings.append(batch_embeddings_np)
+
+final_embeddings = np.vstack(all_embeddings)
+```
+
+Let's put it into a function
+```bash
+def compute_embeddings(texts, batch_size=8):
+    text_batches = make_bacthes(texts, 8)
+
+    all_embeddings = []
+
+    for tqdm in tqdm(text_batches):
+        encoded_input = tokenizer(bacth, padding=True, truncation=True, return_tensors='pt')
+
+        with torch.no_grad():
+            outputs = model(**encoded_input)
+            hidden_states = outputs.last_hidden_state
+
+            batch_embeddings = hidden_states.mean(dim=1)
+            batch_embeddings_np = batch_embeddings.cpu().numpy()
+            all_embeddings.append(batch_embeddings_np)
+
+    final_embeddings = np.vstack(all_embeddings)
+    return final_embeddings
+```
+
+And use it:
+```bash
+X_text = compute_embeddings(df['text'].tolist())
+```
